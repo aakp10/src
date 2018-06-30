@@ -35,11 +35,14 @@ struct tea5767_tune_{
     int mute;
     uint32_t freq;
     int stereo;
+    int is_pll_set;
+    int is_xtal_set;
+    int fm_band; /* set = JAPAN */
 };
 typedef struct tea5767_tune_ tea5767_tune;
 
 struct tea5767_softc_{
-    device_t sc_dev; 
+    device_t sc_dev;
     /* TUNABLE PROPERTIES */
     tea5767_tune tune;
     /* I2C bus controller */
@@ -73,16 +76,26 @@ static void
 tea5767_attach(device_t parent, device_t self, void *aux)
 {
     tea5767_softc *sc = device_private(self);
+    int tea5767_flags = device_cfdata(self)->cf_flags;
     struct i2c_attach_args *ia = aux;
 
     aprint_normal(": TEA5767 Radio\n");
-    
+
     sc->sc_dev = self;
     sc->tune.mute = 0;
     sc->tune.freq = MIN_FM_FREQ;
     sc->tune.stereo = 1;
+    sc->tune.is_pll_set = 0;
+    sc->tune.is_xtal_set = 0;
     sc->sc_i2c_tag = ia->ia_tag;
     sc->sc_addr = ia->ia_addr;
+
+    if (tea5767_flags & TEA5767_PLL_FLAG)
+        sc->tune.is_pll_set = 1;
+    if (tea5767_flags & TEA5767_XTAL_FLAG)
+        sc->tune.is_xtal_set = 1;
+    if (tea5767_flags & TEA5767_JAPAN_FM_FLAG)
+        sc->tune.fm_band = 1;
 
     radio_attach_mi(&tea5767_hw_if, self); 
 }
@@ -100,7 +113,7 @@ tea5767_get_info(void *v, struct radio_info *ri)
                RADIO_CAPS_SET_MONO|
                RADIO_CAPS_HW_SEARCH;
     /** TODO
-     * info function 
+     * info function
      * Read the regs
      */
 
@@ -133,7 +146,7 @@ tea5767_write(tea5767_softc *sc, uint8_t *reg)
 
 static void
 tea5767_read(tea5767_softc *sc, uint8_t *reg)
-{   
+{
     if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
     {
         device_printf(sc->sc_dev, "Bus Acquiration failed \n");
@@ -157,43 +170,46 @@ tea5767_read(tea5767_softc *sc, uint8_t *reg)
 
 static void
 tea5767_set_properties(tea5767_softc *sc, uint8_t *reg)
-{    
+{
     /**
-     *  set the PLL word  
+     *  set the PLL word
      * TODO:
      * Extend this PLL word calc to  High side injection as well (Add fields to tea5767_tune)
      */
-
-    /**
-     * While calculating PLL word
-     *  IF = 225 kHz when clkFreq = 13MHz
-     *  XTAL = 0 and PLLRef = 0
-    */
     reg[0] = 0;
-    uint16_t div = div = (sc->tune.freq * (4000 - 225) / 50;
-    reg[1] = div & 0xff;
-    div = div>>8;
-    reg[0] = div & 0x3f;
-    
+    uint16_t pll_word;
+
+    reg[4] = 0; // XTAL = 0
+    reg[5] = 0; //PLLREF = 0
+
+    if (!sc->tune.is_pll_set)
+        switch(sc->tune.is_xtal_set)
+        {
+            case 0: /*Clk freq = 13MHz */
+                    pll_word = round(4 * (sc->tune.freq * 1000 - 225) * 1000 / 50000);
+                    break;
+            case 1: /*Clk freq = 32.768 MHz */
+                    pll_word = round(4 * (sc->tune.freq * 1000 - 225) * 1000 / 32768);
+                    reg[4] = TEA5767_XTAL;
+                    break;
+        }
+    else
+    {
+        pll_word = round(4 * (sc->tune.freq * 1000 - 225) * 1000 / 50000);
+        reg[5] |= TEA5767_PLLREF;
+    }
+
+    reg[1] = pll_word & 0xff;
+    reg[0] = (pll_word>>8) & 0x3f;
+
     if (sc->tune.mute)
         reg[0] |= TEA5767_MUTE;
 
-    /**
-     * Active settings- 
-     * 
-     * STEREO_NOISE_CTL 
-     * BAND is set to JAPAN FM Band
-     * 
-     * TODO
-     * Customizable clkfrequency 
-     * Alter ref freq for the PLL with xtal + PLLref 
-     */
-    reg[3] = 0;
+    reg[3] = TEA5767_SNC;
     if (sc->tune.stereo == 0)
         reg[3] |= TEA5767_MONO;
-    reg[3] |= TEA5767_FM_BAND | TEA5767_SNC ;
-    /* PLLRef is unset */
-    reg[4] = 0;
+    if(sc->tune.fm_band)
+        reg[3] |= TEA5767_FM_BAND;
 }
 
 static int
@@ -229,12 +245,12 @@ tea5767_search(void *v, int dir)
     return 1;
 }
 
-/** 
+/**
 static int
 tea5767_set_standby(tea5767_softc *sc)
 {
     uint8_t reg[5];
-   
+
     tea5767_set_properties(sc, reg);
     reg[3] |= TEA5767_STANDBY;
 
@@ -242,23 +258,3 @@ tea5767_set_standby(tea5767_softc *sc)
     return 1;
 }
 */
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
