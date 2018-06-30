@@ -52,7 +52,7 @@ typedef struct tea5767_softc_ tea5767_softc;
 static int tea5767_match(device_t, cfdata_t, void *);
 static void tea5767_attach(device_t, device_t, void *);
 
-CFATTACH_DECL_NEW(tea5767,
+CFATTACH_DECL_NEW(tea5767radio,
                   sizeof(tea5767_softc),
                   tea5767_match,
                   tea5767_attach,
@@ -66,6 +66,7 @@ tea5767_match(device_t parent, cfdata_t cf, void *aux)
 
     if (ia->ia_addr == TEA5767_ADDR)
         return I2C_MATCH_ADDRESS_ONLY;
+    return 0;
 }
 
 static void
@@ -86,10 +87,9 @@ tea5767_attach(device_t parent, device_t self, void *aux)
     radio_attach_mi(&tea5767_hw_if, self); 
 }
 
-int
+static int
 tea5767_get_info(void *v, struct radio_info *ri)
 {
-    //move values to ri from sc
     tea5767_softc *sc = v;
     ri->mute = sc->tune.mute;
     ri->stereo = sc->tune.stereo;
@@ -107,7 +107,7 @@ tea5767_get_info(void *v, struct radio_info *ri)
     return 0;
 }
 
-static int
+static void
 tea5767_write(tea5767_softc *sc, uint8_t *reg)
 {
     if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
@@ -128,10 +128,10 @@ tea5767_write(tea5767_softc *sc, uint8_t *reg)
         iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
         device_printf(sc->sc_dev, "write operation failed");
     }
-    return 1;
+    iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
 }
 
-static int
+static void
 tea5767_read(tea5767_softc *sc, uint8_t *reg)
 {   
     if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
@@ -152,7 +152,7 @@ tea5767_read(tea5767_softc *sc, uint8_t *reg)
         iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
         device_printf(sc->sc_dev, "read operation failed");
     }
-    return 1;
+    iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
 }
 
 static void
@@ -196,7 +196,7 @@ tea5767_set_properties(tea5767_softc *sc, uint8_t *reg)
     reg[4] = 0;
 }
 
-int
+static int
 tea5767_set_info(void *v, struct radio_info *ri)
 {
     tea5767_softc *sc = v;
@@ -209,7 +209,7 @@ tea5767_set_info(void *v, struct radio_info *ri)
     tea5767_write(sc,reg);
 }
 
-int
+static int
 tea5767_search(void *v, int dir)
 {
     tea5767_softc *sc = v;
