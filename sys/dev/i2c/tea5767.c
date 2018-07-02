@@ -65,7 +65,7 @@ tea5767_match(device_t parent, cfdata_t cf, void *aux)
     struct i2c_attach_args *ia = aux;
 
     if (ia->ia_addr == TEA5767_ADDR)
-        return I2C_MATCH_ADDRESS_ONLY;
+        return 1;
     return 0;
 }
 
@@ -94,7 +94,81 @@ tea5767_attach(device_t parent, device_t self, void *aux)
     if (tea5767_flags & TEA5767_JAPAN_FM_FLAG)
         sc->tune.fm_band = 1;
 
-    radio_attach_mi(&tea5767_hw_if, sc, self); 
+    radio_attach_mi(&tea5767_hw_if, sc, self);
+}
+
+static void
+tea5767_write(tea5767_softc *sc, uint8_t *reg)
+{
+    if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
+    {
+        device_printf(sc->sc_dev, "Bus Acquiration failed \n");
+        return;
+    }
+    int exec_result = iic_exec(sc->sc_i2c_tag,
+                               I2C_OP_WRITE_WITH_STOP,
+                               sc->sc_addr,
+                               NULL,
+                               0,
+                               reg,
+                               5,
+                               I2C_F_POLL);
+    if (exec_result)
+    {
+        iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
+        device_printf(sc->sc_dev, "write operation failed %d \n",exec_result);
+    }
+    iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
+}
+
+
+static void
+tea5767_set_properties(tea5767_softc *sc, uint8_t *reg)
+{
+    /**
+     *  set the PLL word
+     * TODO:
+     * Extend this PLL word calc to  High side injection as well (Add fields to tea5767_tune)
+     */
+    reg[0] = 0;
+    uint16_t pll_word = 0;
+
+    reg[3] = 0; // XTAL = 0
+    reg[4] = 0; //PLLREF = 0
+
+    if (!sc->tune.is_pll_set)
+        switch(sc->tune.is_xtal_set)
+        {
+            case 0: /*Clk freq = 13MHz */
+                    pll_word = 4 * (sc->tune.freq*1000  - 225) * 1000 / 50000;
+                    break;
+            case 1: /*Clk freq = 32.768 MHz */
+                    pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 32768;
+                    reg[3] = TEA5767_XTAL;
+                    break;
+        }
+    else
+    {
+        pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 50000;
+        reg[4] |= TEA5767_PLLREF;
+    }
+
+    reg[1] = pll_word & 0xff;
+    reg[0] = (pll_word>>8) & 0x3f;
+
+    if (sc->tune.mute)
+        reg[0] |= TEA5767_MUTE;
+
+    reg[3] = TEA5767_SNC;
+    if (sc->tune.stereo == 0)
+        reg[2] |= TEA5767_MONO;
+    if(sc->tune.fm_band)
+        reg[3] |= TEA5767_FM_BAND;
+    for(int i = 0; i < 5; i++)
+    {
+        device_printf(sc->sc_dev, "byte %d :%02x\n",i,reg[i]);
+    }
+
 }
 
 static int
@@ -113,100 +187,7 @@ tea5767_get_info(void *v, struct radio_info *ri)
      * info function
      * Read the regs
      */
-
     return 0;
-}
-
-static void
-tea5767_write(tea5767_softc *sc, uint8_t *reg)
-{
-    if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
-    {
-        device_printf(sc->sc_dev, "Bus Acquiration failed \n");
-        return;
-    }
-    int exec_result = iic_exec(sc->sc_i2c_tag,
-                               I2C_OP_WRITE_WITH_STOP,
-                               sc->sc_addr<<1,
-                               NULL,
-                               0,
-                               reg,
-                               5,
-                               I2C_F_POLL);
-    if (exec_result)
-    {
-        iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
-        device_printf(sc->sc_dev, "write operation failed");
-    }
-    iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
-}
-/*
-static void
-tea5767_read(tea5767_softc *sc, uint8_t *reg)
-{
-    if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
-    {
-        device_printf(sc->sc_dev, "Bus Acquiration failed \n");
-        return;
-    }
-    int exec_result = iic_exec(sc->sc_i2c_tag,
-                               I2C_OP_READ_WITH_STOP,
-                               ((sc->sc_addr)<<1) | 1,
-                               NULL,
-                               0,
-                               reg,
-                               5,
-                               I2C_F_POLL);
-    if (exec_result)
-    {
-        iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
-        device_printf(sc->sc_dev, "read operation failed");
-    }
-    iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
-}
-*/
-static void
-tea5767_set_properties(tea5767_softc *sc, uint8_t *reg)
-{
-    /**
-     *  set the PLL word
-     * TODO:
-     * Extend this PLL word calc to  High side injection as well (Add fields to tea5767_tune)
-     */
-    reg[0] = 0;
-    uint16_t pll_word = 0;
-
-    reg[4] = 0; // XTAL = 0
-    reg[5] = 0; //PLLREF = 0
-
-    if (!sc->tune.is_pll_set)
-        switch(sc->tune.is_xtal_set)
-        {
-            case 0: /*Clk freq = 13MHz */
-                    pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 50000;
-                    break;
-            case 1: /*Clk freq = 32.768 MHz */
-                    pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 32768;
-                    reg[4] = TEA5767_XTAL;
-                    break;
-        }
-    else
-    {
-        pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 50000;
-        reg[5] |= TEA5767_PLLREF;
-    }
-
-    reg[1] = pll_word & 0xff;
-    reg[0] = (pll_word>>8) & 0x3f;
-
-    if (sc->tune.mute)
-        reg[0] |= TEA5767_MUTE;
-
-    reg[3] = TEA5767_SNC;
-    if (sc->tune.stereo == 0)
-        reg[3] |= TEA5767_MONO;
-    if(sc->tune.fm_band)
-        reg[3] |= TEA5767_FM_BAND;
 }
 
 static int
@@ -237,13 +218,37 @@ tea5767_search(void *v, int dir)
     reg[0] = TEA5767_SEARCH;
 
     if (dir)
-        reg[3] |= TEA5767_SUD;
+        reg[2] |= TEA5767_SUD;
 
     tea5767_write(sc, reg);
     return 1;
 }
 
 /**
+static void
+tea5767_read(tea5767_softc *sc, uint8_t *reg)
+{
+    if (iic_acquire_bus(sc->sc_i2c_tag, I2C_F_POLL))
+    {
+        device_printf(sc->sc_dev, "Bus Acquiration failed \n");
+        return;
+    }
+    int exec_result = iic_exec(sc->sc_i2c_tag,
+                               I2C_OP_READ_WITH_STOP,
+                               sc->sc_addr,
+                               NULL,
+                               0,
+                               reg,
+                               5,
+                               I2C_F_POLL);
+    if (exec_result)
+    {
+        iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
+        device_printf(sc->sc_dev, "read operation failed");
+    }
+    iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
+}
+
 static int
 tea5767_set_standby(tea5767_softc *sc)
 {
