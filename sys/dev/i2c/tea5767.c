@@ -130,36 +130,40 @@ tea5767_set_properties(tea5767_softc *sc, uint8_t *reg)
      * TODO:
      * Extend this PLL word calc to  High side injection as well (Add fields to tea5767_tune)
      */
-    reg[0] = 0;
+    memset(reg,0,5);
     uint16_t pll_word = 0;
 
-    reg[3] = 0; // XTAL = 0
-    reg[4] = 0; //PLLREF = 0
-
-    if (!sc->tune.is_pll_set)
-        switch(sc->tune.is_xtal_set)
-        {
-            case 0: /*Clk freq = 13MHz */
-                    pll_word = 4 * (sc->tune.freq*1000  - 225) * 1000 / 50000;
-                    break;
-            case 1: /*Clk freq = 32.768 MHz */
-                    pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 32768;
-                    reg[3] = TEA5767_XTAL;
-                    break;
-        }
+    if (!sc->tune.is_pll_set && !sc->tune.is_xtal_set)
+        pll_word = 4 * (sc->tune.freq  - 225) * 1000 / 50000;
+    else if (!sc->tune.is_pll_set && sc->tune.is_xtal_set)
+    {   /*Clk freq = 32.768 KHz */
+        pll_word = 4 * (sc->tune.freq - 225) * 1000 / 32768;
+        reg[3] = TEA5767_XTAL;
+    }
     else
     {
-        pll_word = 4 * (sc->tune.freq * 1000 - 225) * 1000 / 50000;
+        pll_word = 4 * (sc->tune.freq - 225) * 1000 / 50000;
         reg[4] |= TEA5767_PLLREF;
     }
 
     reg[1] = pll_word & 0xff;
     reg[0] = (pll_word>>8) & 0x3f;
 
-    if (sc->tune.mute)
-        reg[0] |= TEA5767_MUTE;
+    /**
+     * USE once the search function is active
+     * If "is_autosearch_complete" flag is set use the tuned PLL word
+     */
+    /*    reg[1] = sc->tune.read_pll[1];
+        reg[0] |= sc->tune.read_pll[0];
+    */
 
-    reg[3] = TEA5767_SNC;
+    if (sc->tune.mute)
+    {
+        reg[0] |= TEA5767_MUTE;
+        reg[2] |=TEA5767_MUTE_R | TEA5767_MUTE_L;
+    }
+
+    reg[3] |= TEA5767_SNC;
     if (sc->tune.stereo == 0)
         reg[2] |= TEA5767_MONO;
     if(sc->tune.fm_band)
