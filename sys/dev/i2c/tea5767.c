@@ -12,7 +12,7 @@
 #include <dev/radio_if.h>
 
 #include "tea5767reg.h"
-
+#include <sys/proc.h>
 /**
  * Radio hw if functions' prototype
  */
@@ -38,6 +38,8 @@ struct tea5767_tune_{
     int is_pll_set;
     int is_xtal_set;
     int fm_band; /* set = JAPAN */
+    uint8_t read_pll[2];
+    bool is_search_complete;
 };
 typedef struct tea5767_tune_ tea5767_tune;
 
@@ -52,12 +54,8 @@ struct tea5767_softc_{
 };
 typedef struct tea5767_softc_ tea5767_softc;
 
-CFATTACH_DECL_NEW(tea5767radio,
-                  sizeof(tea5767_softc),
-                  tea5767_match,
-                  tea5767_attach,
-                  NULL,
-                  NULL);
+CFATTACH_DECL_NEW(tea5767radio, sizeof(tea5767_softc),
+    tea5767_match, tea5767_attach, NULL, NULL);
 
 static int
 tea5767_match(device_t parent, cfdata_t cf, void *aux)
@@ -86,6 +84,7 @@ tea5767_attach(device_t parent, device_t self, void *aux)
     sc->tune.is_xtal_set = 0;
     sc->sc_i2c_tag = ia->ia_tag;
     sc->sc_addr = ia->ia_addr;
+    memset(sc->tune.read_pll,0,2);
 
     if (tea5767_flags & TEA5767_PLL_FLAG)
         sc->tune.is_pll_set = 1;
@@ -133,27 +132,34 @@ tea5767_set_properties(tea5767_softc *sc, uint8_t *reg)
     memset(reg,0,5);
     uint16_t pll_word = 0;
 
-    if (!sc->tune.is_pll_set && !sc->tune.is_xtal_set)
-        pll_word = 4 * (sc->tune.freq  - 225) * 1000 / 50000;
-    else if (!sc->tune.is_pll_set && sc->tune.is_xtal_set)
-    {   /*Clk freq = 32.768 KHz */
-        pll_word = 4 * (sc->tune.freq - 225) * 1000 / 32768;
-        reg[3] = TEA5767_XTAL;
+    if(!sc->tune.is_search_complete)
+    {
+        if (!sc->tune.is_pll_set && !sc->tune.is_xtal_set)
+            pll_word = 4 * (sc->tune.freq  - 225) * 1000 / 50000;
+        else if (!sc->tune.is_pll_set && sc->tune.is_xtal_set)
+        {
+            pll_word = 4 * (sc->tune.freq - 225) * 1000 / 32768;
+            reg[3] = TEA5767_XTAL;
+        }
+        else
+        {
+            pll_word = 4 * (sc->tune.freq - 225) * 1000 / 50000;
+            reg[4] |= TEA5767_PLLREF;
+        }
+
+        reg[1] = pll_word & 0xff;
+        reg[0] = (pll_word>>8) & 0x3f;
     }
     else
     {
-        pll_word = 4 * (sc->tune.freq - 225) * 1000 / 50000;
-        reg[4] |= TEA5767_PLLREF;
+        reg[1] = sc->tune.read_pll[1];
+        reg[0] |= sc->tune.read_pll[0];
     }
-
-    reg[1] = pll_word & 0xff;
-    reg[0] = (pll_word>>8) & 0x3f;
-
     /**
      * USE once the search function is active
      * If "is_autosearch_complete" flag is set use the tuned PLL word
      */
-    /*    reg[1] = sc->tune.read_pll[1];
+    /*  reg[1] = sc->tune.read_pll[1];
         reg[0] |= sc->tune.read_pll[0];
     */
 
@@ -183,14 +189,9 @@ tea5767_get_info(void *v, struct radio_info *ri)
     ri->stereo = sc->tune.stereo;
     ri->freq = sc->tune.freq;
 
-    /* *VERIFY* */
     ri->caps = RADIO_CAPS_DETECT_STEREO|
                RADIO_CAPS_SET_MONO|
                RADIO_CAPS_HW_SEARCH;
-    /** TODO
-     * info function
-     * Read the regs
-     */
     return 0;
 }
 
@@ -200,35 +201,16 @@ tea5767_set_info(void *v, struct radio_info *ri)
     tea5767_softc *sc = v;
     sc->tune.mute = ri->mute;
     sc->tune.stereo = ri->stereo;
+    if(sc->tune.freq != ri->freq)
+        sc->tune.is_search_complete = false;
     sc->tune.freq = ri->freq;
-
+    tea5767_search(sc, 1);
     uint8_t reg[5];
     tea5767_set_properties(sc,reg);
     tea5767_write(sc,reg);
     return 1;
 }
 
-static int
-tea5767_search(void *v, int dir)
-{
-    tea5767_softc *sc = v;
-    uint8_t reg[5];
-    tea5767_set_properties(sc, reg);
-    /**
-     * search activated
-     * if dir 1 => search up
-     * else : search down
-     */
-    reg[0] = TEA5767_SEARCH;
-
-    if (dir)
-        reg[2] |= TEA5767_SUD;
-
-    tea5767_write(sc, reg);
-    return 1;
-}
-
-/**
 static void
 tea5767_read(tea5767_softc *sc, uint8_t *reg)
 {
@@ -254,14 +236,42 @@ tea5767_read(tea5767_softc *sc, uint8_t *reg)
 }
 
 static int
-tea5767_set_standby(tea5767_softc *sc)
+tea5767_search(void *v, int dir)
 {
+    tea5767_softc *sc = v;
     uint8_t reg[5];
-
     tea5767_set_properties(sc, reg);
-    reg[3] |= TEA5767_STANDBY;
+    /**
+     * search activated
+     * if dir 1 => search up
+     * else : search down
+     */
+    reg[0] |= TEA5767_MUTE | TEA5767_SEARCH;
 
+    if (dir)
+        reg[2] |= TEA5767_SUD;
+    reg[2] |= TEA5767_SSL_1; /* Stop level for search*/
     tea5767_write(sc, reg);
-    return 1;
+
+    /* ?? Try to use reg instead of read_reg - PLL bits are same in r/w mode ?? */
+    uint8_t read_reg[5];
+    memset(read_reg,0,5);
+    tea5767_read(sc, read_reg);
+
+    while(!(read_reg[0]&TEA5767_READY_FLAG))
+    {
+        kpause("tea-station-search", true, 1, NULL);
+        memset(read_reg,0,5);
+        tea5767_read(sc,read_reg);
+    }
+    device_printf(sc->sc_dev, "bandlimit reached : %d\n",(read_reg[0] & 0x40));
+    sc->tune.read_pll[0] = 0;
+    sc->tune.read_pll[1] = reg[1];
+    sc->tune.read_pll[0] |= reg[0] & 0x3f;
+
+    /* Reset the previous settings in the regs */
+    tea5767_set_properties(sc, reg);
+    tea5767_write(sc, reg);
+    sc->tune.is_search_complete = true;
+    return 0;
 }
-*/
