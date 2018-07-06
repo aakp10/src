@@ -177,7 +177,6 @@ tea5767_set_info(void *v, struct radio_info *ri)
     if(sc->tune.freq != ri->freq)
         sc->tune.is_search_complete = false;
     sc->tune.freq = ri->freq;
-    tea5767_search(sc, 1);
     uint8_t reg[5];
     tea5767_set_properties(sc, reg);
     return tea5767_write(sc, reg);
@@ -228,17 +227,25 @@ tea5767_search(void *v, int dir)
 
     while (!(read_reg[0] & TEA5767_READY_FLAG)) {
         kpause("teasrch", true, 1 * hz, NULL);
+        if (read_reg[0]>>6 & 1) {
+            sc->tune.freq = MIN_FM_FREQ;
+            tea5767_set_properties(sc, reg);
+            tea5767_write(sc, reg);
+            return 0;
+        }
+
         memset(read_reg,0,5);
         tea5767_read(sc,read_reg);
     }
     device_printf(sc->sc_dev, "bandlimit reached : %d\n",(read_reg[0] & 0x40));
     sc->tune.read_pll[0] = 0;
-    sc->tune.read_pll[1] = reg[1];
-    sc->tune.read_pll[0] |= reg[0] & 0x3f;
+    sc->tune.read_pll[1] = read_reg[1];
+    sc->tune.read_pll[0] |= read_reg[0] & 0x3f;
 
     /* Reset the previous settings in the regs */
+
+    sc->tune.is_search_complete = true;
     tea5767_set_properties(sc, reg);
     tea5767_write(sc, reg);
-    sc->tune.is_search_complete = true;
     return 0;
 }
