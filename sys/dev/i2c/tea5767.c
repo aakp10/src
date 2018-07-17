@@ -181,7 +181,7 @@ tea5767_set_info(void *v, struct radio_info *ri)
     tea5767_set_properties(sc, reg);
     return tea5767_write(sc, reg);
 }
-
+/*
 static int
 tea5767_read(struct tea5767_softc *sc, uint8_t *reg)
 {
@@ -202,7 +202,7 @@ tea5767_read(struct tea5767_softc *sc, uint8_t *reg)
     iic_release_bus(sc->sc_i2c_tag, I2C_F_POLL);
     return 0;
 }
-
+*/
 static int
 tea5767_search(void *v, int dir)
 {
@@ -214,38 +214,12 @@ tea5767_search(void *v, int dir)
      * if dir 1 => search up
      * else : search down
      */
-    reg[0] |= TEA5767_MUTE | TEA5767_SEARCH;
+
+    reg[0] |= TEA5767_SEARCH;
 
     if (dir)
         reg[2] |= TEA5767_SUD;
-    reg[2] |= TEA5767_SSL_1; /* Stop level for search*/
-    tea5767_write(sc, reg);
-
-    uint8_t read_reg[5];
-    memset(read_reg,0,5);
-    tea5767_read(sc, read_reg);
-
-    while (!(read_reg[0] & TEA5767_READY_FLAG)) {
-        kpause("teasrch", true, 1 * hz, NULL);
-        if (read_reg[0]>>6 & 1) {
-            sc->tune.freq = MIN_FM_FREQ;
-            tea5767_set_properties(sc, reg);
-            tea5767_write(sc, reg);
-            return 0;
-        }
-
-        memset(read_reg,0,5);
-        tea5767_read(sc,read_reg);
-    }
-    device_printf(sc->sc_dev, "bandlimit reached : %d\n",(read_reg[0] & 0x40));
-    sc->tune.read_pll[0] = 0;
-    sc->tune.read_pll[1] = read_reg[1];
-    sc->tune.read_pll[0] |= read_reg[0] & 0x3f;
-
-    /* Reset the previous settings in the regs */
-
-    sc->tune.is_search_complete = true;
-    tea5767_set_properties(sc, reg);
+    reg[2] |= TEA5767_SSL_3; /* Stop level for search*/
     tea5767_write(sc, reg);
     return 0;
 }
