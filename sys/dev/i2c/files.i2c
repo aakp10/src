@@ -341,6 +341,6 @@ attach	tsllux at iic
 file	dev/i2c/tsl256x.c			tsllux
 
 #TEA5767 Radio
-device tea5767radio
+device tea5767radio : radiodev
 attach tea5767radio at iic
 file dev/i2c/tea5767.c				tea5767radio
