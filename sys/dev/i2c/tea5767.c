@@ -215,7 +215,13 @@ tea5767_set_info(void *v, struct radio_info *ri)
     }
     uint8_t reg[5];
     tea5767_set_properties(sc, reg);
-    return tea5767_write(sc, reg);
+    tea5767_write(sc, reg);
+    /*
+    memset(reg,0,5);
+    tea5767_read(sc,reg);
+    device_printf(sc->sc_dev, "adc level %d \n",(reg[3] & 0xf0)>>4);
+    */
+    return 0;
 }
 
 static int
@@ -223,26 +229,14 @@ tea5767_search(void *v, int dir)
 {
     struct tea5767_softc *sc = v;
     uint8_t reg[5];
-
-    /* increment frequency to search for the next frequency*/
-    sc->tune.freq += 100;
-    tea5767_set_properties(sc, reg);
-    /*
-     * search activated
-     * if dir 1 => search up
-     * else : search down
-     */
-
-    reg[0] |= TEA5767_SEARCH;
-
-    if (dir)
-        reg[2] |= TEA5767_SUD;
-    reg[2] |= sc->tune.adc_stop_level; /* Stop level for search*/
-    tea5767_write(sc, reg);
-
-    memset(reg, 0, 5);
-    while (tea5767_read(sc, reg), !(reg[0] & TEA5767_READY_FLAG)) {
-        kpause("teasrch", true, hz/100, NULL);
+    memset(reg,0,5);
+    while(tea5767_read(sc,reg) ,(reg[3] & 0xf0) != /* ??misc ADC??*/)
+    {
+        sc->tune.freq = sc->tune.freq >= 107500 ? 87500 : sc->tune.freq + 100;
+        tea5767_set_properties(sc, reg);
+        tea5767_write(sc, reg);
+        memset(reg,0,5);
     }
     return 0;
 }
+
